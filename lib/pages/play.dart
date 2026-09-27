@@ -1,17 +1,15 @@
-import 'dart:async';
-
+// ignore_for_file: cascade_invocations, lines_longer_than_80_chars
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:nes_ui/nes_ui.dart';
-import 'package:ricochlime/flame/ricochlime_game.dart';
-import 'package:ricochlime/i18n/strings.g.dart';
-import 'package:ricochlime/nes/coin_count.dart';
-import 'package:ricochlime/pages/game_over.dart';
-import 'package:ricochlime/pages/restart_game.dart';
-import 'package:ricochlime/utils/brightness_extension.dart';
-import 'package:ricochlime/utils/ricochlime_palette.dart';
-import 'package:ricochlime/utils/stows.dart';
+import 'package:ricochlime/game/game_state.dart';
+import 'package:ricochlime/game/snowball_smash_game.dart';
+import 'package:ricochlime/pages/settings.dart';
+import 'package:ricochlime/utils/constants/snowball_palette.dart';
+import 'package:ricochlime/widgets/snow_coin_badge.dart';
+import 'package:ricochlime/widgets/snow_game_over_dialog.dart';
+import 'package:ricochlime/widgets/snow_level_complete_dialog.dart';
+import 'package:ricochlime/widgets/snow_pause_dialog.dart';
 
 class PlayPage extends StatefulWidget {
   const PlayPage({super.key});
@@ -21,33 +19,25 @@ class PlayPage extends StatefulWidget {
 }
 
 class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
+  late final SnowballSmashGame _game;
+
   @override
   void initState() {
     super.initState();
-    RicochlimeGame.instance
-      ..showGameOverDialog = showGameOverDialog
+    _game = SnowballSmashGame.instance;
+    _game
+      ..onLevelComplete = _showLevelCompleteDialog
+      ..onGameOver = _showGameOverDialog
       ..audio.playBgm();
-    WidgetsBinding.instance.addObserver(this);
-    if (RicochlimeGame.instance.state.value == .gameOver) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => RicochlimeGame.instance.gameOver(),
-      );
-    }
-  }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    RicochlimeGame.reduceMotion = MediaQuery.disableAnimationsOf(context);
-    RicochlimeGame.isDarkMode.value =
-        Theme.of(context).brightness == Brightness.dark;
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
-    RicochlimeGame.instance
-      ..showGameOverDialog = null
-      ..cancelCurrentTurn()
+    _game
+      ..onLevelComplete = null
+      ..onGameOver = null
       ..audio.pauseBgm();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -57,262 +47,249 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     switch (state) {
-      case .resumed:
-        RicochlimeGame.instance.audio.playBgm();
-      case .detached || .inactive || .hidden || .paused:
-        RicochlimeGame.instance.audio.pauseBgm();
+      case AppLifecycleState.resumed:
+        _game.audio.playBgm();
+      case AppLifecycleState.detached:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _game.audio.pauseBgm();
     }
   }
 
-  /// Whether the game over dialog is currently showing,
-  /// used to prevent multiple dialogs from showing at once.
-  static bool showingGameOverDialog = false;
+  bool _isDialogShowing = false;
 
-  Future<GameOverAction> showGameOverDialog() async {
-    assert(mounted);
-    if (!mounted) return .nothingYet;
+  void _showLevelCompleteDialog() {
+    if (!mounted || _isDialogShowing) return;
+    _isDialogShowing = true;
 
-    if (showingGameOverDialog) return .nothingYet;
-    showingGameOverDialog = true;
-    try {
-      return await NesDialog.show<GameOverAction>(
-            context: context,
-            builder: (context) => GameOverDialog(
-              score: RicochlimeGame.score.value,
-              game: RicochlimeGame.instance,
-            ),
-          ) ??
-          .nothingYet;
-    } finally {
-      showingGameOverDialog = false;
-    }
-  }
-
-  double _playerPos(Size screenSize) {
-    final fitted = applyBoxFit(
-      BoxFit.contain,
-      const Size(RicochlimeGame.expectedWidth, RicochlimeGame.expectedHeight),
-      screenSize,
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SnowLevelCompleteDialog(
+        level: _game.levelManager.currentLevel,
+        coinsEarned: _game.levelManager.coinsEarnedThisLevel,
+        snowballsEarned: _game.levelManager.snowballsEarnedThisLevel,
+        onNextLevel: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          _game.advanceToNextLevel();
+        },
+        onHome: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          Navigator.of(this.context).pop();
+        },
+      ),
     );
-    final top = (screenSize.height - fitted.destination.height) / 2;
-    return top + fitted.destination.height * 0.72;
+  }
+
+  void _showGameOverDialog() {
+    if (!mounted || _isDialogShowing) return;
+    _isDialogShowing = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SnowGameOverDialog(
+        onContinue: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          _game.loadLevel(_game.levelManager.currentLevel);
+        },
+        onRestart: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          _game.restartCurrentLevel();
+        },
+        onHome: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          Navigator.of(this.context).pop();
+        },
+      ),
+    );
+  }
+
+  void _showPauseDialog() {
+    if (_isDialogShowing) return;
+    _isDialogShowing = true;
+    final prevState = _game.state.value;
+    _game.state.value = SnowballGameState.paused;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SnowPauseDialog(
+        onResume: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          _game.state.value = prevState;
+        },
+        onRestart: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          _game.restartCurrentLevel();
+        },
+        onSettings: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SettingsPage()),
+          );
+        },
+        onHome: () {
+          Navigator.of(context).pop();
+          _isDialogShowing = false;
+          Navigator.of(this.context).pop();
+        },
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final screenSize = MediaQuery.sizeOf(context);
-    final bgColor = RicochlimeGame.isDarkMode.value
-        ? RicochlimePalette.waterColorDark
-        : RicochlimePalette.waterColor;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarBrightness: colorScheme.brightness,
-        statusBarIconBrightness: colorScheme.brightness.opposite,
-        systemNavigationBarColor: RicochlimeGame.isDarkMode.value
-            ? RicochlimePalette.waterColorDark
-            : RicochlimePalette.waterColor,
-        systemNavigationBarIconBrightness: colorScheme.brightness.opposite,
-      ),
+      value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        backgroundColor: bgColor,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          systemOverlayStyle: SystemUiOverlayStyle.light,
-          leadingWidth: 80 + (stows.showFpsCounter.value ? (16 + 24 * 3) : 0),
-          leading: Row(
-            mainAxisSize: MainAxisSize.min,
-            spacing: 16,
+        backgroundColor: SnowballPalette.snowGround,
+        body: SafeArea(
+          child: Stack(
             children: [
-              const SizedBox(), // To add `spacing` before the back button
-              NesIconButton(
-                onPress: () => Navigator.of(context).pop(),
-                icon: NesIcons.leftArrowIndicator,
-                primaryColor: Colors.white.withValues(alpha: 0.9),
-                secondaryColor: RicochlimePalette.grassColorDark.withValues(
-                  alpha: 0.9,
-                ),
-                size: const Size.square(20),
-              ),
-              NesTooltip(
-                message: t.restartGameDialog.title,
-                arrowPlacement: switch (textDirection) {
-                  TextDirection.ltr => NesTooltipArrowPlacement.left,
-                  TextDirection.rtl => NesTooltipArrowPlacement.right,
-                },
-                arrowDirection: NesTooltipArrowDirection.bottom,
-                child: NesIconButton(
-                  onPress: () => NesDialog.show(
-                    context: context,
-                    builder: (context) => RestartGameDialog(
-                      restartGame: RicochlimeGame.instance.restartGame,
-                    ),
-                  ),
-                  icon: NesIcons.redo,
-                  primaryColor: Colors.white.withValues(alpha: 0.9),
-                  secondaryColor: RicochlimePalette.grassColorDark.withValues(
-                    alpha: 0.9,
-                  ),
-                  size: const Size.square(20),
-                ),
-              ),
-              if (stows.showFpsCounter.value) const FpsCounter(),
-            ],
-          ),
-          centerTitle: true,
-          title: Column(
-            spacing: 4,
-            children: [
-              ValueListenableBuilder(
-                valueListenable: stows.highScore,
-                builder: (context, highScore, child) => Text(
-                  highScore <= 0 ? '' : t.playPage.highScore(p: highScore),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 12,
-                    height: 1,
+              // 1. Core Flame Game
+              Center(
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: SizedBox(
+                    width: SnowballSmashGame.arenaWidth,
+                    height: SnowballSmashGame.arenaHeight,
+                    child: GameWidget(game: _game),
                   ),
                 ),
               ),
-              ValueListenableBuilder(
-                valueListenable: RicochlimeGame.score,
-                builder: (context, score, child) => Text(
-                  '$score',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 32,
-                    height: 0.7,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            Padding(
-              padding: const .directional(end: 16),
-              child: CoinCount(textColor: Colors.white.withValues(alpha: 0.9)),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            const SizedBox(height: 2),
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: Padding(
-                      padding: theme.platform == TargetPlatform.android
-                          // Some space to avoid back gestures on Android
-                          ? const EdgeInsets.symmetric(horizontal: 8)
-                          : EdgeInsets.zero,
-                      child: FittedBox(
-                        child: SizedBox(
-                          width: RicochlimeGame.expectedWidth,
-                          height: RicochlimeGame.expectedHeight,
-                          child: GameWidget(game: RicochlimeGame.instance),
+
+              // 2. Top HUD Bar (Pause, Level Badge, Coins)
+              Positioned(
+                top: 8,
+                left: 12,
+                right: 12,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Pause button
+                    GestureDetector(
+                      onTap: _showPauseDialog,
+                      child: Image.asset(
+                        'assets/images/ui/btn_pause.png',
+                        width: 38,
+                        height: 38,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.none,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1976D2),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFF64B5F6), width: 1.5),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x33000000),
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.pause_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Positioned.fill(
-                    bottom: screenSize.height - _playerPos(screenSize),
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 8, right: 8),
-                      child: Column(
-                        mainAxisAlignment: .end,
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: .center,
-                        children: [
-                          IgnorePointer(
-                            child: ValueListenableBuilder(
-                              valueListenable: RicochlimeGame.timeDilation,
-                              builder: (context, timeDilation, _) =>
-                                  AnimatedOpacity(
-                                    opacity: timeDilation == 1.0 ? 0.0 : 1.0,
-                                    duration: const Duration(milliseconds: 200),
-                                    child: Text(
-                                      '${timeDilation.toStringAsFixed(1)}x',
-                                      style: TextStyle(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.9,
-                                        ),
-                                        fontSize: 32,
-                                      ),
-                                    ),
-                                  ),
-                            ),
+
+                    // Level Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D47A1).withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFF42A5F5), width: 1.5),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x33000000),
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
                           ),
-                          if (stows.showUndoButton.value)
-                            ValueListenableBuilder(
-                              valueListenable: RicochlimeGame.instance.state,
-                              builder: (context, state, child) {
-                                final show = state == .shooting;
-                                return AnimatedOpacity(
-                                  opacity: show ? 1 : 0,
-                                  duration: const Duration(milliseconds: 200),
-                                  child: IgnorePointer(
-                                    ignoring: !show,
-                                    child: child,
-                                  ),
-                                );
-                              },
-                              child: NesTooltip(
-                                message: t.playPage.undo,
-                                arrowDirection: NesTooltipArrowDirection.bottom,
-                                child: NesIconButton(
-                                  onPress: () {
-                                    RicochlimeGame.instance.cancelCurrentTurn();
-                                    stows.totalMovesUndone.value++;
-                                  },
-                                  icon: NesIcons.delete,
-                                  primaryColor: Colors.white.withValues(
-                                    alpha: 0.9,
-                                  ),
-                                  secondaryColor: RicochlimePalette
-                                      .grassColorDark
-                                      .withValues(alpha: 0.9),
-                                  size: const Size.square(20),
-                                ),
-                              ),
-                            ),
                         ],
                       ),
+                      child: Text(
+                        'Level ${_game.levelManager.currentLevel}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+
+                    // Coins Badge
+                    const SnowCoinBadge(),
+                  ],
+                ),
               ),
-            ),
-          ],
+
+              // 3. Snowball Counter Pill (below Pause button on top left)
+              Positioned(
+                top: 54,
+                left: 12,
+                child: ListenableBuilder(
+                  listenable: _game.levelManager.availableSnowballs,
+                  builder: (context, _) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D47A1).withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF64B5F6), width: 1.2),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Image.asset(
+                            'assets/images/ui/snowball_sphere.png',
+                            width: 18,
+                            height: 18,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.none,
+                            errorBuilder: (context, error, stackTrace) => Container(
+                              width: 16,
+                              height: 16,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'x ${_game.levelManager.availableSnowballs.value}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    );
-  }
-}
-
-class FpsCounter extends StatelessWidget {
-  const FpsCounter({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: RicochlimeGame.fpsStream,
-      builder: (context, fpsSnapshot) {
-        final int fps = fpsSnapshot.data ?? RicochlimeGame.fps;
-        return Text(
-          fps.toString(),
-          style: TextStyle(
-            fontSize: 24,
-            color: Colors.white.withValues(alpha: 0.9),
-          ),
-        );
-      },
     );
   }
 }

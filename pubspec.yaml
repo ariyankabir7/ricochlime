@@ -75,6 +75,15 @@ flutter:
   assets:
     - assets/icon/icon.png
     - assets/images/
+    - assets/images/player/
+    - assets/images/enemies/red/
+    - assets/images/enemies/blue/
+    - assets/images/enemies/green/
+    - assets/images/characters/
+    - assets/images/snowballs/
+    - assets/images/ui/
+    - assets/images/background/
+    - assets/images/environment/
     - assets/google_fonts/Atkinson_Hyperlegible/
     - assets/google_fonts/Silkscreen/
     - assets/audio/bgm/

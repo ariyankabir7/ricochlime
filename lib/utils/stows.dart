@@ -27,6 +27,10 @@ class Stows {
   final showReflectionInAimGuide = PlainStow('showReflectionInAimGuide', true);
 
   final coins = PlainStow('coins', 0);
+  final currentLevel = PlainStow('currentLevel', 1);
+  final highestLevelUnlocked = PlainStow('highestLevelUnlocked', 1);
+  final selectedCharacter = PlainStow('selectedCharacter', 'default');
+  final selectedSnowball = PlainStow('selectedSnowball', 'normal');
   final bulletColor = PlainStow(
     'bulletColor',
     ShopItems.bulletColors.first.color,
