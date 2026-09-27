@@ -193,6 +193,11 @@ class WinterBackground extends PositionComponent
     _drawPineTree(canvas, width - 4.0, 130.0, scale: 1.1);
     _drawPineTree(canvas, width - 3.0, 180.0, scale: 1.2);
 
+    if (height > 220) {
+      _drawPineTree(canvas, 3.5, height - 58.0, scale: 1.1);
+      _drawPineTree(canvas, width - 3.5, height - 54.0, scale: 1.05);
+    }
+
     // Wooden fence posts at bottom sides (matching UI.png!)
     _drawWoodenFence(canvas, 4.0, height - 32.0);
     _drawWoodenFence(canvas, width - 10.0, height - 32.0);

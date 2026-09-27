@@ -83,6 +83,12 @@ class Snowball extends BodyComponent with ContactCallbacks {
       return;
     }
 
+    // Continuous downward nudge if snowball is moving nearly horizontally
+    // to prevent infinite horizontal bouncing
+    if (body.linearVelocity.y.abs() < 8.0) {
+      body.linearVelocity.y += 28.0 * dt;
+    }
+
     // Record trail
     _timeSinceLastTrail += dt;
     if (_timeSinceLastTrail >= 0.02) {
@@ -221,8 +227,8 @@ class Snowball extends BodyComponent with ContactCallbacks {
 
   // Anti-stuck bounce logic
   int horizontalCollisions = 0;
-  static const maxHorizontalCollisions = 40;
-  static const horizontalVelocityRatio = 0.0524077792830412;
+  static const maxHorizontalCollisions = 2;
+  static const horizontalVelocityRatio = 0.08;
 
   static bool isVelocityHorizontal(Vector2 velocity) {
     if (velocity.x == 0) return false;
@@ -242,7 +248,7 @@ class Snowball extends BodyComponent with ContactCallbacks {
     }
 
     if (horizontalCollisions >= maxHorizontalCollisions) {
-      body.linearVelocity.y += speed * horizontalVelocityRatio;
+      body.linearVelocity.y += speed * 0.15;
     }
   }
 }

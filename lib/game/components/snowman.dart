@@ -150,13 +150,25 @@ class Snowman extends BodyComponent with ContactCallbacks {
     return world.createBody(bodyDef)..createFixture(fixtureDef);
   }
 
+  int _pendingDamage = 0;
+
   @override
   void update(double dt) {
     super.update(dt);
     _bobbingTimer += dt * 2.5;
 
-    // Handle dying state and destruction animation
+    // 1. Process pending contact damage outside of the physics step when world is unlocked
+    if (_pendingDamage > 0 && !isDead) {
+      final dmg = _pendingDamage;
+      _pendingDamage = 0;
+      takeDamage(dmg);
+    }
+
+    // 2. Handle dying state and destruction animation
     if (state == SnowmanState.dying) {
+      if (isMounted && body.isActive) {
+        body.setActive(false);
+      }
       if (_destrTicker != null) {
         _destrTicker!.update(dt);
         if (_destrTicker!.done()) {
@@ -239,22 +251,25 @@ class Snowman extends BodyComponent with ContactCallbacks {
       final pos = isMounted ? body.position.clone() : initialPosition.clone();
       parent?.add(SnowBurstEffect(position: pos));
     }
-
-    // Play hit sound
-    if (isMounted && game is SnowballSmashGame) {
-      (game as SnowballSmashGame).audio.playHit();
-    }
   }
 
   void _die() {
     if (state == SnowmanState.dying || state == SnowmanState.destroyed) return;
     state = SnowmanState.dying;
-    if (isMounted) {
+    if (isMounted && body.isActive) {
       body.setActive(false);
     }
     _healthBar.removeFromParent();
 
     final deathPos = isMounted ? body.position.clone() : initialPosition.clone();
+
+    // Notify game and check if a bonus snowball was awarded for this throw
+    var earnedSnowball = false;
+    if (isMounted && game is SnowballSmashGame) {
+      final smashGame = game as SnowballSmashGame;
+      earnedSnowball = smashGame.onSnowmanDestroyed(this);
+      smashGame.triggerScreenShake(intensity: 2.0);
+    }
 
     // Spawn destruction poof
     if (parent != null) {
@@ -266,11 +281,11 @@ class Snowman extends BodyComponent with ContactCallbacks {
       );
 
       // Spawn reward floating texts
-      if (rewardSnowballs > 0) {
+      if (earnedSnowball) {
         parent?.add(
           FloatingRewardEffect(
             position: deathPos + Vector2(0, -8),
-            text: '+$rewardSnowballs Snowball',
+            text: '+1 Snowball',
             color: const Color(0xFF64B5F6),
           ),
         );
@@ -286,13 +301,6 @@ class Snowman extends BodyComponent with ContactCallbacks {
       }
     }
 
-    // Notify game
-    if (isMounted && game is SnowballSmashGame) {
-      final smashGame = game as SnowballSmashGame;
-      smashGame.onSnowmanDestroyed(this);
-      smashGame.triggerScreenShake(intensity: 2.0);
-    }
-
     _destrTicker?.reset();
     _dyingTimer = 0.6;
   }
@@ -303,7 +311,11 @@ class Snowman extends BodyComponent with ContactCallbacks {
     if (isDead) return;
 
     if (other is Snowball) {
-      takeDamage(other.damage);
+      _pendingDamage += other.damage;
+      // Play hit sound immediately on contact
+      if (isMounted && game is SnowballSmashGame) {
+        (game as SnowballSmashGame).audio.playHit();
+      }
     }
   }
 

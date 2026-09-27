@@ -1,10 +1,10 @@
 // ignore_for_file: cascade_invocations, lines_longer_than_80_chars
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ricochlime/pages/play.dart';
 import 'package:ricochlime/pages/settings.dart';
 import 'package:ricochlime/pages/shop.dart';
-import 'package:ricochlime/utils/constants/snowball_palette.dart';
 import 'package:ricochlime/utils/stows.dart';
 import 'package:ricochlime/widgets/character_avatar.dart';
 import 'package:ricochlime/widgets/snow_coin_badge.dart';
@@ -17,26 +17,52 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
+  // Santa is first/default; removed 'default' character
   final List<Map<String, String>> _characters = const [
-    {'id': 'default', 'name': 'Default'},
+    {'id': 'santa', 'name': 'Santa'},
+    {'id': 'reindeer', 'name': 'Reindeer'},
     {'id': 'blue_winter', 'name': 'Blue Winter'},
     {'id': 'green_hood', 'name': 'Green Hood'},
-    {'id': 'reindeer', 'name': 'Reindeer'},
-    {'id': 'santa', 'name': 'Santa'},
     {'id': 'penguin', 'name': 'Penguin'},
   ];
 
   int _characterIndex = 0;
 
+  // Play button animation
+  late final AnimationController _playButtonController;
+  late final Animation<double> _playButtonScale;
+
   @override
   void initState() {
     super.initState();
+
+    // Set santa as default if 'default' skin is stored
     final currentSkin = stows.selectedCharacter.value;
-    final index = _characters.indexWhere((c) => c['id'] == currentSkin);
+    if (currentSkin == 'default') {
+      stows.selectedCharacter.value = 'santa';
+    }
+    final updatedSkin = stows.selectedCharacter.value;
+    final index = _characters.indexWhere((c) => c['id'] == updatedSkin);
     if (index >= 0) {
       _characterIndex = index;
     }
+
+    _playButtonController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 100),
+      lowerBound: 0.0,
+      upperBound: 1.0,
+    );
+    _playButtonScale = Tween<double>(begin: 1.0, end: 0.93).animate(
+      CurvedAnimation(parent: _playButtonController, curve: Curves.easeIn),
+    );
+  }
+
+  @override
+  void dispose() {
+    _playButtonController.dispose();
+    super.dispose();
   }
 
   void _prevCharacter() {
@@ -53,10 +79,22 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  Future<void> _onPlayTap() async {
+    await _playButtonController.forward();
+    await _playButtonController.reverse();
+    if (!mounted) return;
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PlayPage()),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentSkin = _characters[_characterIndex]['id']!;
     final currentSkinName = _characters[_characterIndex]['name']!;
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
@@ -74,6 +112,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           child: SafeArea(
+            bottom: false, // We handle bottom padding manually for nav bar
             child: Column(
               children: [
                 // 1. Top Bar: Coins + Settings Cog
@@ -96,21 +135,27 @@ class _HomePageState extends State<HomePage> {
                             MaterialPageRoute(builder: (_) => const SettingsPage()),
                           );
                         },
-                        child: Image.asset(
-                          'assets/images/ui/btn_settings.png',
-                          width: 40,
-                          height: 40,
-                          fit: BoxFit.contain,
-                          filterQuality: FilterQuality.none,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1976D2),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: const Color(0xFF64B5F6), width: 1.5),
+                        child: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF1E88E5), Color(0xFF0D47A1)],
                             ),
-                            child: const Icon(Icons.settings, color: Colors.white, size: 22),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF64B5F6), width: 1.5),
+                            boxShadow: const [
+                              BoxShadow(color: Color(0x44000000), blurRadius: 4, offset: Offset(0, 3)),
+                            ],
+                          ),
+                          child: Image.asset(
+                            'assets/images/ui/btn_settings.png',
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.none,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Icon(Icons.settings_rounded, color: Colors.white, size: 22),
                           ),
                         ),
                       ),
@@ -120,7 +165,7 @@ class _HomePageState extends State<HomePage> {
 
                 const SizedBox(height: 10),
 
-                // 2. Logo "SNOWBALL SMASH"
+                // 2. Logo
                 const SnowballLogo(fontSize: 32),
 
                 const Spacer(),
@@ -129,96 +174,52 @@ class _HomePageState extends State<HomePage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Left arrow
-                    GestureDetector(
-                      onTap: _prevCharacter,
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1565C0),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF64B5F6), width: 2),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x33000000),
-                              blurRadius: 4,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
-                      ),
-                    ),
-
+                    _buildArrowButton(onTap: _prevCharacter, isLeft: true),
                     const SizedBox(width: 20),
-
-                    // Character Preview
                     Column(
                       children: [
                         CharacterAvatar(skin: currentSkin, size: 110),
                         const SizedBox(height: 6),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0D47A1).withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(10),
+                            color: const Color(0xFF0D47A1).withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            currentSkinName,
+                            currentSkinName.toUpperCase(),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 12,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.0,
                             ),
                           ),
                         ),
                       ],
                     ),
-
                     const SizedBox(width: 20),
-
-                    // Right arrow
-                    GestureDetector(
-                      onTap: _nextCharacter,
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1565C0),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF64B5F6), width: 2),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x33000000),
-                              blurRadius: 4,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 20),
-                      ),
-                    ),
+                    _buildArrowButton(onTap: _nextCharacter, isLeft: false),
                   ],
                 ),
 
                 const Spacer(),
 
-                // 4. Level Card & Big Yellow Play Button
+                // 4. Level Card & 3D Play Button
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1565C0),
-                      borderRadius: BorderRadius.circular(20),
+                      gradient: const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
+                      ),
+                      borderRadius: BorderRadius.circular(22),
                       border: Border.all(color: const Color(0xFF64B5F6), width: 2),
                       boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x44000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 4),
-                        ),
+                        BoxShadow(color: Color(0x55000000), blurRadius: 10, offset: Offset(0, 5)),
                       ],
                     ),
                     child: Column(
@@ -231,16 +232,15 @@ class _HomePageState extends State<HomePage> {
                             return Column(
                               children: [
                                 Text(
-                                  'Level $level',
+                                  'LEVEL $level',
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 18,
                                     fontWeight: FontWeight.w900,
-                                    letterSpacing: 1.0,
+                                    letterSpacing: 1.2,
                                   ),
                                 ),
                                 const SizedBox(height: 8),
-                                // Progress bar with gift box
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
@@ -256,7 +256,9 @@ class _HomePageState extends State<HomePage> {
                                         widthFactor: ((level % 5) / 5).clamp(0.2, 1.0),
                                         child: Container(
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFF00E676),
+                                            gradient: const LinearGradient(
+                                              colors: [Color(0xFF00E676), Color(0xFF00C853)],
+                                            ),
                                             borderRadius: BorderRadius.circular(5),
                                           ),
                                         ),
@@ -275,54 +277,16 @@ class _HomePageState extends State<HomePage> {
                           },
                         ),
 
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 16),
 
-                        // Big Yellow Play Button
-                        GestureDetector(
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const PlayPage()),
-                            );
-                          },
-                          child: Image.asset(
-                            'assets/images/ui/btn_play_yellow.png',
-                            height: 60,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.none,
-                            errorBuilder: (context, error, stackTrace) => SizedBox(
-                              width: double.infinity,
-                              height: 54,
-                              child: ElevatedButton(
-                                onPressed: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(builder: (_) => const PlayPage()),
-                                  );
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: SnowballPalette.playButtonYellow,
-                                  foregroundColor: Colors.white,
-                                  elevation: 6,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(27),
-                                  ),
-                                ),
-                                child: const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.play_arrow_rounded, size: 36, color: Colors.white),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'Play',
-                                      style: TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: 1.2,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
+                        // 3D Gamified Play Button (SVG/Canvas-based, no image)
+                        ScaleTransition(
+                          scale: _playButtonScale,
+                          child: GestureDetector(
+                            onTap: _onPlayTap,
+                            onTapDown: (_) => _playButtonController.forward(),
+                            onTapCancel: () => _playButtonController.reverse(),
+                            child: const _GamePlayButton(),
                           ),
                         ),
                       ],
@@ -332,13 +296,13 @@ class _HomePageState extends State<HomePage> {
 
                 const Spacer(),
 
-                // 5. Bottom Navigation Bar: Store, Characters, Levels, Settings
+                // 5. Bottom Navigation Bar with edge-to-edge safe padding
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  padding: EdgeInsets.fromLTRB(0, 12, 0, 12 + bottomPadding),
                   decoration: const BoxDecoration(
-                    color: Color(0xDD1565C0),
+                    color: Color(0xEE0D47A1),
                     border: Border(
-                      top: BorderSide(color: Color(0xFF64B5F6), width: 1.5),
+                      top: BorderSide(color: Color(0xFF42A5F5), width: 1.5),
                     ),
                   ),
                   child: Row(
@@ -389,6 +353,33 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildArrowButton({required VoidCallback onTap, required bool isLeft}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF1E88E5), Color(0xFF0D47A1)],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF64B5F6), width: 2),
+          boxShadow: const [
+            BoxShadow(color: Color(0x44000000), blurRadius: 4, offset: Offset(0, 3)),
+          ],
+        ),
+        child: Icon(
+          isLeft ? Icons.arrow_back_ios_rounded : Icons.arrow_forward_ios_rounded,
+          color: Colors.white,
+          size: 20,
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomNavButton({
     required IconData icon,
     required String label,
@@ -403,9 +394,16 @@ class _HomePageState extends State<HomePage> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFF1E88E5),
-              borderRadius: BorderRadius.circular(10),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF2196F3), Color(0xFF1565C0)],
+              ),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: const Color(0xFF90CAF9), width: 1.5),
+              boxShadow: const [
+                BoxShadow(color: Color(0x33000000), blurRadius: 3, offset: Offset(0, 2)),
+              ],
             ),
             child: Icon(icon, color: Colors.white, size: 24),
           ),
@@ -466,12 +464,22 @@ class _HomePageState extends State<HomePage> {
                       width: 52,
                       height: 52,
                       decoration: BoxDecoration(
-                        color: unlocked ? const Color(0xFFFFB300) : const Color(0xFF37474F),
+                        gradient: unlocked
+                            ? const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFFFFCA28), Color(0xFFFF8F00)],
+                              )
+                            : null,
+                        color: unlocked ? null : const Color(0xFF37474F),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: unlocked ? Colors.white : const Color(0xFF546E7A),
                           width: 2,
                         ),
+                        boxShadow: unlocked
+                            ? [const BoxShadow(color: Color(0x44000000), blurRadius: 4, offset: Offset(0, 2))]
+                            : null,
                       ),
                       child: Center(
                         child: unlocked
@@ -495,4 +503,96 @@ class _HomePageState extends State<HomePage> {
       },
     );
   }
+}
+
+/// A pure Dart/Canvas 3D-looking gamified play button.
+class _GamePlayButton extends StatelessWidget {
+  const _GamePlayButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 58,
+      child: CustomPaint(
+        painter: _PlayButtonPainter(),
+        child: const Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+              SizedBox(width: 6),
+              Text(
+                'PLAY',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2.0,
+                  shadows: [
+                    Shadow(color: Color(0x88000000), offset: Offset(1, 2), blurRadius: 4),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayButtonPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rr = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      const Radius.circular(28),
+    );
+
+    // Bottom "shadow" layer (3D depth effect)
+    final bottomRR = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 5, size.width, size.height),
+      const Radius.circular(28),
+    );
+    canvas.drawRRect(
+      bottomRR,
+      Paint()..color = const Color(0xFFB45309), // dark amber shadow
+    );
+
+    // Main gradient fill
+    final mainPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFFFFCA28), // bright gold
+          Color(0xFFFFA000), // deep amber
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+    canvas.drawRRect(rr, mainPaint);
+
+    // Top highlight gloss
+    final glossRR = RRect.fromRectAndRadius(
+      Rect.fromLTWH(6, 3, size.width - 12, size.height * 0.4),
+      const Radius.circular(20),
+    );
+    canvas.drawRRect(
+      glossRR,
+      Paint()..color = const Color(0x55FFFFFF),
+    );
+
+    // Outer border
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = const Color(0xFFFFE082)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

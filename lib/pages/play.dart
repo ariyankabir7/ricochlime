@@ -6,6 +6,7 @@ import 'package:ricochlime/game/game_state.dart';
 import 'package:ricochlime/game/snowball_smash_game.dart';
 import 'package:ricochlime/pages/settings.dart';
 import 'package:ricochlime/utils/constants/snowball_palette.dart';
+import 'package:ricochlime/utils/stows.dart';
 import 'package:ricochlime/widgets/snow_coin_badge.dart';
 import 'package:ricochlime/widgets/snow_game_over_dialog.dart';
 import 'package:ricochlime/widgets/snow_level_complete_dialog.dart';
@@ -30,6 +31,10 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
       ..onGameOver = _showGameOverDialog
       ..audio.playBgm();
 
+    if (_game.isLoaded) {
+      _game.loadLevel(stows.currentLevel.value);
+    }
+
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -38,7 +43,8 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
     _game
       ..onLevelComplete = null
       ..onGameOver = null
-      ..audio.pauseBgm();
+      ..audio.pauseBgm()
+      ..dismissGame();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -132,9 +138,9 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
           _game.restartCurrentLevel();
         },
         onSettings: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const SettingsPage()),
-          );
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
         },
         onHome: () {
           Navigator.of(context).pop();
@@ -147,28 +153,30 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: SnowballPalette.snowGround,
-        body: SafeArea(
-          child: Stack(
+    final mediaPadding = MediaQuery.of(context).padding;
+
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          _game.dismissGame();
+        }
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: Scaffold(
+          backgroundColor: SnowballPalette.snowGround,
+          // Use resizeToAvoidBottomInset: false so keyboard never shrinks the game
+          resizeToAvoidBottomInset: false,
+          body: Stack(
             children: [
-              // 1. Core Flame Game
-              Center(
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: SnowballSmashGame.arenaWidth,
-                    height: SnowballSmashGame.arenaHeight,
-                    child: GameWidget(game: _game),
-                  ),
-                ),
-              ),
+              // 1. Core Flame Game — fills the FULL screen (edge to edge)
+              Positioned.fill(child: GameWidget(game: _game)),
 
               // 2. Top HUD Bar (Pause, Level Badge, Coins)
+              // Positioned below status bar using top safe area inset
               Positioned(
-                top: 8,
+                top: mediaPadding.top + 8,
                 left: 12,
                 right: 12,
                 child: Row(
@@ -177,19 +185,58 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
                     // Pause button
                     GestureDetector(
                       onTap: _showPauseDialog,
-                      child: Image.asset(
-                        'assets/images/ui/btn_pause.png',
-                        width: 38,
-                        height: 38,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.none,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          width: 36,
-                          height: 36,
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF1E88E5), Color(0xFF0D47A1)],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFF64B5F6),
+                            width: 1.5,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x44000000),
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Image.asset(
+                          'assets/images/ui/btn_pause.png',
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.none,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(
+                                Icons.pause_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              ),
+                        ),
+                      ),
+                    ),
+
+                    // Level Badge
+                    ListenableBuilder(
+                      listenable: _game.levelManager.currentLevelNotifier,
+                      builder: (context, _) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xFF64B5F6), width: 1.5),
+                            color: const Color(0xCC0D47A1),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: const Color(0xFF42A5F5),
+                              width: 1.5,
+                            ),
                             boxShadow: const [
                               BoxShadow(
                                 color: Color(0x33000000),
@@ -198,39 +245,17 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
                               ),
                             ],
                           ),
-                          child: const Icon(
-                            Icons.pause_rounded,
-                            color: Colors.white,
-                            size: 22,
+                          child: Text(
+                            'Level ${_game.levelManager.currentLevelNotifier.value}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.8,
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
-
-                    // Level Badge
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0D47A1).withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFF42A5F5), width: 1.5),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x33000000),
-                            blurRadius: 4,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        'Level ${_game.levelManager.currentLevel}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
+                        );
+                      },
                     ),
 
                     // Coins Badge
@@ -241,34 +266,33 @@ class _PlayPageState extends State<PlayPage> with WidgetsBindingObserver {
 
               // 3. Snowball Counter Pill (below Pause button on top left)
               Positioned(
-                top: 54,
+                top: mediaPadding.top + 58,
                 left: 12,
                 child: ListenableBuilder(
                   listenable: _game.levelManager.availableSnowballs,
                   builder: (context, _) {
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0D47A1).withValues(alpha: 0.8),
+                        color: const Color(0xCC0D47A1),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFF64B5F6), width: 1.2),
+                        border: Border.all(
+                          color: const Color(0xFF64B5F6),
+                          width: 1.2,
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Image.asset(
-                            'assets/images/ui/snowball_sphere.png',
-                            width: 18,
-                            height: 18,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.none,
-                            errorBuilder: (context, error, stackTrace) => Container(
-                              width: 16,
-                              height: 16,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
+                          Container(
+                            width: 16,
+                            height: 16,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
                             ),
                           ),
                           const SizedBox(width: 6),

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flame/input.dart';
@@ -20,6 +21,7 @@ import 'package:ricochlime/game/components/player.dart';
 import 'package:ricochlime/game/components/snowball.dart';
 import 'package:ricochlime/game/components/snowman.dart';
 import 'package:ricochlime/game/components/walls.dart';
+import 'package:ricochlime/game/effects/snow_poof_effect.dart';
 import 'package:ricochlime/game/game_state.dart';
 import 'package:ricochlime/game/level_manager.dart';
 import 'package:ricochlime/game/models/snowman_config.dart';
@@ -30,18 +32,82 @@ import 'package:ricochlime/utils/stows.dart';
 /// The core Snowball Smash Flame game.
 class SnowballSmashGame extends Forge2DGame
     with PanDetector, TapCallbacks, MouseMovementDetector, SingleGameInstance {
-  SnowballSmashGame._() : super(gravity: Vector2.zero(), zoom: 1.0) {
+  SnowballSmashGame._() : super(gravity: Vector2(0, 16.0), zoom: 1.0) {
     physics_settings.maxTranslation = Snowball.speed;
   }
 
   static final instance = SnowballSmashGame._();
   static final log = Logger('SnowballSmashGame');
 
-  static const double aspectRatio = 0.6;
   static const double arenaWidth = 128.0;
-  static const double arenaHeight = arenaWidth / aspectRatio; // ~213.33
+  static double arenaHeight = 213.33;
 
-  double get bottomBoundaryY => arenaHeight - 6.0;
+  double get bottomBoundaryY => arenaHeight + 8.0;
+
+  List<ArenaWall> _walls = [];
+  double _lastWallHeight = 0.0;
+
+  /// Routes all game components to [world] so they are rendered through
+  /// the CameraComponent and scaled to fill the entire screen edge-to-edge.
+  @override
+  FutureOr<void> add(Component component) {
+    if (component is CameraComponent || component is Forge2DWorld) {
+      return super.add(component);
+    }
+    return world.add(component);
+  }
+
+  @override
+  Future<void> addAll(Iterable<Component> components) {
+    return world.addAll(components);
+  }
+
+  @override
+  void remove(Component component) {
+    world.remove(component);
+  }
+
+  @override
+  void removeWhere(bool Function(Component) test) {
+    world.children.where(test).toList().forEach((c) => c.removeFromParent());
+    super.removeWhere(test);
+  }
+
+  void _setupBoundaries() {
+    if ((_lastWallHeight - arenaHeight).abs() < 0.1 && _walls.isNotEmpty) {
+      return;
+    }
+    _lastWallHeight = arenaHeight;
+    for (final wall in _walls) {
+      wall.removeFromParent();
+    }
+    _walls = createArenaBoundaries(
+      arenaWidth,
+      arenaHeight,
+      includeBottom: false,
+    );
+    _walls.forEach(world.add);
+  }
+
+  /// Adapts arenaHeight and viewfinder zoom so the game world fills the entire
+  /// screen edge-to-edge with no letterboxing or gaps.
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    if (size.x <= 0 || size.y <= 0) return;
+
+    final zoom = size.x / arenaWidth;
+    arenaHeight = size.y / zoom;
+
+    camera.viewfinder.zoom = zoom;
+    camera.viewfinder.anchor = Anchor.topLeft;
+    camera.viewfinder.position = Vector2.zero();
+
+    if (isLoaded) {
+      _setupBoundaries();
+      player.position = Vector2(arenaWidth * 0.5, arenaHeight - 16.0);
+    }
+  }
 
   final ValueNotifier<SnowballGameState> state = ValueNotifier(
     SnowballGameState.idle,
@@ -57,6 +123,7 @@ class SnowballSmashGame extends Forge2DGame
 
   bool get isAimAllowed => state.value.isAimAllowed;
   bool _turnCancelled = false;
+  List<SnowmanSpawnConfig> _pendingReinforcements = [];
 
   // Screen shake variables
   double _shakeTimer = 0.0;
@@ -71,31 +138,54 @@ class SnowballSmashGame extends Forge2DGame
   Future<void> onLoad() async {
     await super.onLoad();
 
+    camera.viewfinder.anchor = Anchor.topLeft;
+    camera.viewfinder.position = Vector2.zero();
+    if (size.x > 0 && size.y > 0) {
+      final zoom = size.x / arenaWidth;
+      arenaHeight = size.y / zoom;
+      camera.viewfinder.zoom = zoom;
+    }
+
     // 1. Background
     background = WinterBackground();
-    add(background);
+    world.add(background);
 
     // 2. Arena boundaries (walls on top, left, right; open bottom)
-    createArenaBoundaries(
-      arenaWidth,
-      arenaHeight,
-      includeBottom: false,
-    ).forEach(add);
+    _setupBoundaries();
 
     // 3. Player at bottom center
     player = Player(
-      initialPosition: Vector2(arenaWidth * 0.5, arenaHeight - 22.0),
+      initialPosition: Vector2(arenaWidth * 0.5, arenaHeight - 16.0),
     );
-    add(player);
+    world.add(player);
 
     // 4. Aim guide
     aimGuide = AimGuide();
-    add(aimGuide);
+    world.add(aimGuide);
 
-    // 5. Initialize current level from storage
+    // 5. Pre-warm the Forge2D physics world
+    _warmUpPhysics();
+
+    // 6. Initialize current level from storage
     await stows.currentLevel.waitUntilRead();
     final savedLevel = stows.currentLevel.value;
     loadLevel(savedLevel);
+  }
+
+  /// Creates a temporary static body to pre-warm Forge2D's broad-phase.
+  void _warmUpPhysics() {
+    try {
+      final shape = CircleShape()..radius = 1.0;
+      final fixtureDef = FixtureDef(shape);
+      final bodyDef = BodyDef(
+        position: Vector2(arenaWidth / 2, arenaHeight / 2),
+        type: BodyType.static,
+      );
+      final warmBody = world.createBody(bodyDef)..createFixture(fixtureDef);
+      world.destroyBody(warmBody);
+    } catch (_) {
+      // Silently ignore — warm-up is best-effort.
+    }
   }
 
   /// Loads and spawns the specified level.
@@ -105,15 +195,16 @@ class SnowballSmashGame extends Forge2DGame
 
     levelManager.loadLevel(levelNumber);
     final config = levelManager.currentLevelConfig;
+    _pendingReinforcements = List.from(config.reinforcements);
 
     // Spawn obstacles (ice blocks)
     for (final obs in config.obstacles) {
-      add(IceBlock(initialPosition: obs.position, blockSize: obs.size));
+      world.add(IceBlock(initialPosition: obs.position, blockSize: obs.size));
     }
 
     // Spawn snowmen
     for (final spawn in config.snowmen) {
-      add(
+      world.add(
         Snowman(
           id: spawn.id,
           initialPosition: spawn.position,
@@ -132,9 +223,28 @@ class SnowballSmashGame extends Forge2DGame
   }
 
   void _clearLevelEntities() {
-    removeWhere((c) => c is Snowman);
-    removeWhere((c) => c is IceBlock);
-    removeWhere((c) => c is Snowball);
+    world.children.whereType<Snowman>().toList().forEach(
+      (s) => s.removeFromParent(),
+    );
+    world.children.whereType<IceBlock>().toList().forEach(
+      (i) => i.removeFromParent(),
+    );
+    world.children.whereType<Snowball>().toList().forEach(
+      (b) => b.removeFromParent(),
+    );
+  }
+
+  /// Dismisses active gameplay, clears entities, and resets state to idle.
+  /// Used when leaving the play screen so the next entry starts a completely fresh level.
+  void dismissGame() {
+    _turnCancelled = true;
+    _clearLevelEntities();
+    _pendingReinforcements.clear();
+    aimGuide.finishAim();
+    aimGuide.lastMousePosition = null;
+    player.resetIdle();
+    timeDilation.value = 1.0;
+    state.value = SnowballGameState.idle;
   }
 
   void restartCurrentLevel() {
@@ -147,7 +257,8 @@ class SnowballSmashGame extends Forge2DGame
   }
 
   /// Called by Snowman when it is destroyed.
-  void onSnowmanDestroyed(Snowman snowman) {
+  /// Returns true if a bonus snowball was awarded on this throw.
+  bool onSnowmanDestroyed(Snowman snowman) {
     final spawnConfig = SnowmanSpawnConfig(
       id: snowman.id,
       type: snowman.type,
@@ -156,8 +267,9 @@ class SnowballSmashGame extends Forge2DGame
       rewardCoins: snowman.rewardCoins,
       rewardSnowballs: snowman.rewardSnowballs,
     );
-    levelManager.onSnowmanDestroyed(spawnConfig);
+    final earnedSnowball = levelManager.onSnowmanDestroyed(spawnConfig);
     audio.playPoof();
+    return earnedSnowball;
   }
 
   /// Triggers a screen shake effect.
@@ -168,7 +280,9 @@ class SnowballSmashGame extends Forge2DGame
 
   @override
   void update(double dt) {
-    if (dt > 0.5) return; // Skip huge frame drops
+    // Skip frames that are too large (first frame, background wake, etc.)
+    // to prevent physics from taking too long and causing ANR.
+    if (dt > 0.1) return;
     dt = dt * timeDilation.value;
 
     ticker.tick(dt);
@@ -178,14 +292,11 @@ class SnowballSmashGame extends Forge2DGame
     if (_shakeTimer > 0) {
       _shakeTimer -= dt;
       if (_shakeTimer <= 0) {
-        camera.viewfinder.position = Vector2(arenaWidth / 2, arenaHeight / 2);
+        camera.viewfinder.position = Vector2.zero();
       } else {
         final offsetX = (_random.nextDouble() * 2 - 1) * _shakeIntensity;
         final offsetY = (_random.nextDouble() * 2 - 1) * _shakeIntensity;
-        camera.viewfinder.position = Vector2(
-          arenaWidth / 2 + offsetX,
-          arenaHeight / 2 + offsetY,
-        );
+        camera.viewfinder.position = Vector2(offsetX, offsetY);
       }
     }
   }
@@ -195,35 +306,52 @@ class SnowballSmashGame extends Forge2DGame
 
   // --- Input Handlers ---
 
+  /// Converts a screen-pixel position (from widget events) into world coordinates,
+  /// accounting for the camera zoom and centering applied in [onGameResize].
+  Vector2 _toWorld(Vector2 screenPos) {
+    return camera.globalToLocal(screenPos);
+  }
+
   @override
   void onPanStart(DragStartInfo info) {
     if (!isAimAllowed) return;
     state.value = SnowballGameState.aiming;
-    aimGuide.aim(info.eventPosition.widget);
+    aimGuide.aim(_toWorld(info.eventPosition.widget));
     player.playAiming(aimGuide.aimDetails?.unitDir);
   }
 
   @override
   void onPanUpdate(DragUpdateInfo info) {
-    aimGuide.lastMousePosition = info.eventPosition.widget;
+    aimGuide.lastMousePosition = _toWorld(info.eventPosition.widget);
     if (!isAimAllowed) return;
-    aimGuide.aim(info.eventPosition.widget);
+    if (state.value != SnowballGameState.aiming) {
+      state.value = SnowballGameState.aiming;
+    }
+    aimGuide.aim(_toWorld(info.eventPosition.widget));
     player.playAiming(aimGuide.aimDetails?.unitDir);
   }
 
   @override
   void onPanEnd(DragEndInfo info) {
     aimGuide.lastMousePosition = null;
-    if (state.value == SnowballGameState.aiming) {
+    if (state.value == SnowballGameState.aiming ||
+        (isAimAllowed && aimGuide.aimDetails != null)) {
       _executeTurn();
+    } else {
+      aimGuide.finishAim();
+      player.resetIdle();
+      if (isAimAllowed) {
+        state.value = SnowballGameState.idle;
+      }
     }
   }
 
   @override
   void onPanCancel() {
-    if (state.value == SnowballGameState.aiming) {
-      aimGuide.finishAim();
-      player.resetIdle();
+    aimGuide.lastMousePosition = null;
+    aimGuide.finishAim();
+    player.resetIdle();
+    if (isAimAllowed) {
       state.value = SnowballGameState.idle;
     }
   }
@@ -239,9 +367,10 @@ class SnowballSmashGame extends Forge2DGame
   @override
   void onMouseMove(PointerHoverInfo info) {
     if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      aimGuide.lastMousePosition = info.eventPosition.widget;
+      final worldPos = _toWorld(info.eventPosition.widget);
+      aimGuide.lastMousePosition = worldPos;
       if (isAimAllowed) {
-        aimGuide.aim(info.eventPosition.widget);
+        aimGuide.aim(worldPos);
         player.playAiming(aimGuide.aimDetails?.unitDir);
       }
     }
@@ -252,20 +381,28 @@ class SnowballSmashGame extends Forge2DGame
     final aimDir = aimGuide.finishAim();
     if (aimDir == null) {
       player.resetIdle();
-      state.value = SnowballGameState.idle;
+      if (isAimAllowed) {
+        state.value = SnowballGameState.idle;
+      }
       return;
     }
 
     final snowballCount = levelManager.availableSnowballs.value;
     if (snowballCount <= 0) {
       player.resetIdle();
-      state.value = SnowballGameState.idle;
+      if (isAimAllowed) {
+        state.value = SnowballGameState.idle;
+      }
       return;
     }
 
     state.value = SnowballGameState.shooting;
     player.playThrow();
     audio.playThrow();
+    levelManager.snowballEarnedThisTurn = false;
+    levelManager.bonusSnowballsThisTurn = 0;
+
+    if (_turnCancelled) return;
 
     final snowballs = <Snowball>[];
     final selectedType = _getSelectedSnowballType();
@@ -317,11 +454,11 @@ class SnowballSmashGame extends Forge2DGame
         return;
       }
 
-      // 4. Downward movement (if enabled on this level)
+      // 4. Downward movement & reinforcements (for level 5+)
       final config = levelManager.currentLevelConfig;
       if (config.hasDownwardMovement) {
         state.value = SnowballGameState.movingSnowmen;
-        final aliveSnowmen = children
+        final aliveSnowmen = world.children
             .whereType<Snowman>()
             .where((s) => !s.isDead)
             .toList();
@@ -330,11 +467,39 @@ class SnowballSmashGame extends Forge2DGame
           s.moveDown(config.downwardMoveDistance);
         }
 
-        await ticker.delayed(const Duration(milliseconds: 650));
+        await ticker.delayed(const Duration(milliseconds: 550));
         if (_turnCancelled) return;
 
+        // Spawn reinforcement wave if available from top
+        if (_pendingReinforcements.isNotEmpty) {
+          final countToSpawn = min(3, _pendingReinforcements.length);
+          final spawnBatch = _pendingReinforcements.take(countToSpawn).toList();
+          _pendingReinforcements.removeRange(0, countToSpawn);
+
+          for (final spawn in spawnBatch) {
+            world.add(SnowPoofEffect(position: spawn.position, radius: 10.0));
+            world.add(
+              Snowman(
+                id: spawn.id,
+                initialPosition: spawn.position,
+                maxHp: spawn.maxHp,
+                type: spawn.type,
+                rewardCoins: spawn.rewardCoins,
+                rewardSnowballs: spawn.rewardSnowballs,
+              ),
+            );
+          }
+          audio.playPoof();
+          await ticker.delayed(const Duration(milliseconds: 250));
+          if (_turnCancelled) return;
+        }
+
         // Check danger condition (Game Over only occurs if a snowman crosses danger line!)
-        final dangerReached = aliveSnowmen.any(
+        final allCurrentSnowmen = world.children
+            .whereType<Snowman>()
+            .where((s) => !s.isDead)
+            .toList();
+        final dangerReached = allCurrentSnowmen.any(
           (s) => s.body.position.y >= config.dangerLineY,
         );
 
